@@ -339,7 +339,6 @@ export const CompanionApp: React.FC = () => {
         };
         recorder.onstop = async () => {
           const blob = new Blob(chunks, { type: 'audio/webm' });
-          console.log(`[SpeakerAudio] chunk recorded: ${blob.size} bytes, track settings:`, audioTracks[0]?.getSettings());
           if (blob.size > 0) {
             try {
               const reader = new FileReader();

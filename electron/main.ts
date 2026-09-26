@@ -208,13 +208,9 @@ async function createWindow() {
   // OS/Chromium share-picker (this app already knows what it wants to capture and why).
   mainWindow.webContents.session.setDisplayMediaRequestHandler(
     (_request, callback) => {
-      console.log('[SpeakerAudio] getDisplayMedia request received, listing screen sources...');
       desktopCapturer
         .getSources({ types: ['screen'] })
-        .then((sources) => {
-          console.log(`[SpeakerAudio] found ${sources.length} screen source(s), supplying loopback audio`);
-          callback(sources[0] ? { video: sources[0], audio: 'loopback' } : {});
-        })
+        .then((sources) => callback(sources[0] ? { video: sources[0], audio: 'loopback' } : {}))
         .catch((err) => {
           console.error('[SpeakerAudio] desktopCapturer.getSources failed:', err);
           callback({});
