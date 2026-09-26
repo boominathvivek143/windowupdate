@@ -31,7 +31,7 @@ export const SecurityModal: React.FC<SecurityModalProps> = ({
   webAppUrl,
   onUpdateWebAppUrl,
 }) => {
-  const [copied, setCopied] = useState<'token' | 'pairing' | 'webAppUrl' | null>(null);
+  const [copied, setCopied] = useState<'token' | 'pairing' | 'webAppUrl' | 'trust' | null>(null);
   const [isEditingToken, setIsEditingToken] = useState(false);
   const [customToken, setCustomToken] = useState('');
   const [tokenError, setTokenError] = useState<string | null>(null);
@@ -42,7 +42,7 @@ export const SecurityModal: React.FC<SecurityModalProps> = ({
   if (!isOpen) return null;
 
   // Electron's sandboxed renderer blocks navigator.clipboard; go through the main process instead
-  const copyText = async (text: string, which: 'token' | 'pairing' | 'webAppUrl') => {
+  const copyText = async (text: string, which: 'token' | 'pairing' | 'webAppUrl' | 'trust') => {
     const success = window.companion?.copyText
       ? await window.companion.copyText(text)
       : await navigator.clipboard.writeText(text).then(() => true).catch(() => false);
@@ -92,13 +92,13 @@ export const SecurityModal: React.FC<SecurityModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
       <div
-        className={`w-full max-w-md rounded-xl border p-5 shadow-2xl transition-all ${
+        className={`w-full max-w-md max-h-[85vh] flex flex-col rounded-xl border shadow-2xl transition-all ${
           isDark
             ? 'bg-neutral-900 border-neutral-800 text-neutral-100'
             : 'bg-white border-neutral-200 text-neutral-900'
         }`}
       >
-        <div className="flex items-center justify-between pb-3 border-b border-neutral-800/60 mb-4">
+        <div className="shrink-0 flex items-center justify-between px-5 pt-5 pb-3 border-b border-neutral-800/60">
           <div className="flex items-center gap-2">
             <div className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400">
               <Shield className="w-4 h-4" />
@@ -113,7 +113,7 @@ export const SecurityModal: React.FC<SecurityModalProps> = ({
           </button>
         </div>
 
-        <div className="space-y-4 text-xs">
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 space-y-4 text-xs">
           <p className={isDark ? 'text-neutral-400' : 'text-neutral-600'}>
             The WebSocket service listens on port <code className="font-mono text-indigo-400">{port}</code>. Only senders presenting this random token are permitted to transmit text.
           </p>
@@ -321,18 +321,40 @@ export const SecurityModal: React.FC<SecurityModalProps> = ({
             )}
 
             {primaryAddress && (
-              <p className="text-[11px] text-neutral-500">
-                First time pairing from a given browser?{' '}
-                <a
-                  href={`https://${primaryAddress}/health`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-indigo-300 hover:text-indigo-200 underline"
+              <div>
+                <label className="block text-[11px] font-medium text-neutral-400 mb-1">
+                  Trust This Connection (first time only)
+                </label>
+                <div
+                  className={`flex items-center justify-between rounded-lg border px-3 py-2 ${
+                    isDark ? 'bg-neutral-950 border-neutral-800' : 'bg-neutral-50 border-neutral-200'
+                  }`}
                 >
-                  Trust this connection once
-                </a>{' '}
-                (self-signed certificate — there's no public one for a LAN address).
-              </p>
+                  <a
+                    href={`https://${primaryAddress}/health`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-mono text-[11px] text-indigo-400 hover:text-indigo-300 underline truncate"
+                  >
+                    https://{primaryAddress}/health
+                  </a>
+                  <button
+                    onClick={() => copyText(`https://${primaryAddress}/health`, 'trust')}
+                    className="p-1 text-neutral-400 hover:text-indigo-400 transition-colors shrink-0 ml-2"
+                    title="Copy trust-connection link"
+                  >
+                    {copied === 'trust' ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                </div>
+                <p className="text-[11px] text-neutral-500 mt-1">
+                  Open once per browser and click through the "not secure" warning (self-signed certificate — there's
+                  no public one for a LAN address).
+                </p>
+              </div>
             )}
           </div>
 
@@ -346,7 +368,7 @@ export const SecurityModal: React.FC<SecurityModalProps> = ({
           </div>
         </div>
 
-        <div className="mt-5 flex justify-end">
+        <div className="shrink-0 flex justify-end px-5 pb-5 pt-3 border-t border-neutral-800/60">
           <button
             onClick={onClose}
             className={`px-4 py-1.5 rounded-lg text-xs font-medium transition-colors ${
