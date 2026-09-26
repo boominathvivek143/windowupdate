@@ -1,0 +1,6 @@
+{
+  "name": "Window auto Update",
+  "description": "Real-time text synchronization desktop companion app and web sender powered by WebSockets, Electron IPC, and secure token handshakes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
