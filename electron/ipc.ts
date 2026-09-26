@@ -11,6 +11,7 @@ export const IPC_CHANNELS = {
   SET_FOLLOW_CURSOR: 'companion:set-follow-cursor',
   ON_TOOLTIP_SCROLL: 'companion:on-tooltip-scroll',
   ON_FOLLOW_PAUSE_CHANGE: 'companion:on-follow-pause-change',
+  ON_TOGGLE_SPEAKER_LISTENING: 'companion:on-toggle-speaker-listening',
 
   // Renderer -> Main invokes
   GET_CONNECTION_STATUS: 'companion:get-connection-status',

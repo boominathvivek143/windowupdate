@@ -203,6 +203,26 @@ async function createWindow() {
     callback(permission === 'media');
   });
 
+  // Speaker-audio transcription: supplies the first screen source plus system loopback audio
+  // directly, so getDisplayMedia({audio:true}) in the renderer resolves without showing the
+  // OS/Chromium share-picker (this app already knows what it wants to capture and why).
+  mainWindow.webContents.session.setDisplayMediaRequestHandler(
+    (_request, callback) => {
+      console.log('[SpeakerAudio] getDisplayMedia request received, listing screen sources...');
+      desktopCapturer
+        .getSources({ types: ['screen'] })
+        .then((sources) => {
+          console.log(`[SpeakerAudio] found ${sources.length} screen source(s), supplying loopback audio`);
+          callback(sources[0] ? { video: sources[0], audio: 'loopback' } : {});
+        })
+        .catch((err) => {
+          console.error('[SpeakerAudio] desktopCapturer.getSources failed:', err);
+          callback({});
+        });
+    },
+    { useSystemPicker: false }
+  );
+
   mainWindow.removeMenu();
 
   // Track window size and position changes
@@ -652,6 +672,18 @@ function registerGlobalShortcuts() {
   // Ctrl/Cmd+Alt+F toggles follow-cursor mode (the window cannot be clicked while it follows)
   if (!globalShortcut.register('CommandOrControl+Alt+F', () => setFollowCursor(!followCursorEnabled))) {
     console.warn('Could not register Ctrl/Cmd+Alt+F (already used by another app)');
+  }
+
+  // Ctrl/Cmd+Alt+L toggles speaker-audio transcription. The capture itself (getUserMedia/
+  // MediaRecorder) only exists in the renderer, so this just relays the keypress there.
+  if (
+    !globalShortcut.register('CommandOrControl+Alt+L', () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(IPC_CHANNELS.ON_TOGGLE_SPEAKER_LISTENING);
+      }
+    })
+  ) {
+    console.warn('Could not register Ctrl/Cmd+Alt+L (already used by another app)');
   }
 }
 

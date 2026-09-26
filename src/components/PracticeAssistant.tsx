@@ -1,5 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Brain, Mic, MicOff, Search, UserRound, Users, Volume2 } from 'lucide-react';
+import { Brain, Mic, MicOff, Search, UserRound, Users, Volume2, Speaker } from 'lucide-react';
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
 
 type RecognitionLike = {
   continuous: boolean;
@@ -45,11 +54,95 @@ export const PracticeAssistant: React.FC = () => {
   const lastAnalyzedRef = useRef('');
   const debounceRef = useRef<any>(null);
 
+  // Speaker-only audio capture: getDisplayMedia is the only way a browser can access system/tab
+  // audio output (e.g. the other person's voice on a call) in isolation from the microphone.
+  // The native SpeechRecognition API can't be pointed at an arbitrary stream, so captured audio
+  // is recorded in rolling chunks and transcribed server-side via Gemini instead.
+  const [listeningSpeaker, setListeningSpeaker] = useState(false);
+  const listeningSpeakerRef = useRef(false);
+  const speakerStreamRef = useRef<MediaStream | null>(null);
+  const speakerRecorderRef = useRef<MediaRecorder | null>(null);
+
   const appendTranscript = (value: string) => {
     const next = `${transcriptRef.current}${transcriptRef.current ? ' ' : ''}${value}`.trim();
     transcriptRef.current = next.slice(-12000);
     setTranscript(transcriptRef.current);
+    if (autoAnalyze) {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => analyze(), 1400);
+    }
   };
+
+  const stopSpeakerCapture = () => {
+    listeningSpeakerRef.current = false;
+    try {
+      speakerRecorderRef.current?.stop();
+    } catch {}
+    speakerStreamRef.current?.getTracks().forEach((t) => t.stop());
+    speakerStreamRef.current = null;
+    setListeningSpeaker(false);
+  };
+
+  const startSpeakerCapture = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      const audioTracks = stream.getAudioTracks();
+      if (audioTracks.length === 0) {
+        stream.getTracks().forEach((t) => t.stop());
+        setStatus('No audio track — pick a tab/window and enable "Share audio".');
+        return;
+      }
+      // Video is only required to satisfy the API; nothing is shown, so stop it immediately
+      stream.getVideoTracks().forEach((t) => t.stop());
+      speakerStreamRef.current = stream;
+      listeningSpeakerRef.current = true;
+      setListeningSpeaker(true);
+      setStatus('Listening to speaker audio…');
+
+      const audioOnlyStream = new MediaStream(audioTracks);
+      audioTracks[0].onended = stopSpeakerCapture;
+
+      const recordChunk = () => {
+        if (!listeningSpeakerRef.current) return;
+        const recorder = new MediaRecorder(audioOnlyStream);
+        const chunks: Blob[] = [];
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0) chunks.push(e.data);
+        };
+        recorder.onstop = async () => {
+          const blob = new Blob(chunks, { type: 'audio/webm' });
+          if (blob.size > 0) {
+            try {
+              const audio = await blobToDataUrl(blob);
+              const res = await fetch('/api/transcribe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ audio }),
+              });
+              const data = await res.json().catch(() => ({}));
+              if (res.ok && data.text) appendTranscript(data.text);
+            } catch {}
+          }
+          if (listeningSpeakerRef.current) recordChunk();
+        };
+        speakerRecorderRef.current = recorder;
+        recorder.start();
+        setTimeout(() => {
+          if (recorder.state !== 'inactive') recorder.stop();
+        }, 6000);
+      };
+      recordChunk();
+    } catch {
+      setStatus('Speaker audio capture was cancelled or denied.');
+    }
+  };
+
+  const toggleSpeakerListening = () => {
+    if (listeningSpeaker) stopSpeakerCapture();
+    else startSpeakerCapture();
+  };
+
+  useEffect(() => stopSpeakerCapture, []);
 
   const analyze = async (override?: string) => {
     const current = (override || transcriptRef.current).trim();
@@ -90,13 +183,7 @@ export const PracticeAssistant: React.FC = () => {
       for (let i = event.resultIndex || 0; i < event.results.length; i++) {
         if (event.results[i]?.isFinal) finalText += event.results[i][0]?.transcript || '';
       }
-      if (finalText.trim()) {
-        appendTranscript(finalText.trim());
-        if (autoAnalyze) {
-          if (debounceRef.current) clearTimeout(debounceRef.current);
-          debounceRef.current = setTimeout(() => analyze(), 1400);
-        }
-      }
+      if (finalText.trim()) appendTranscript(finalText.trim());
     };
     recognition.onerror = (event: any) => {
       setListening(false);
@@ -159,9 +246,18 @@ export const PracticeAssistant: React.FC = () => {
             <span className="text-neutral-500">Speaking:</span>
             <button onClick={() => setRole('interviewer')} className={`px-2 py-1 rounded border ${role === 'interviewer' ? 'border-indigo-500 bg-indigo-500/15 text-indigo-200' : 'border-neutral-800 text-neutral-400'}`}><Users className="inline w-3 h-3 mr-1" />Interviewer</button>
             <button onClick={() => setRole('candidate')} className={`px-2 py-1 rounded border ${role === 'candidate' ? 'border-indigo-500 bg-indigo-500/15 text-indigo-200' : 'border-neutral-800 text-neutral-400'}`}><UserRound className="inline w-3 h-3 mr-1" />Candidate</button>
-            <button onClick={toggleListening} className={`ml-auto px-2.5 py-1 rounded-md ${listening ? 'bg-red-500/15 text-red-300' : 'bg-neutral-800 text-neutral-200'}`}>
+            <button
+              onClick={toggleSpeakerListening}
+              disabled={listening}
+              title="Capture only speaker/system audio (e.g. the other person's voice on a call), not your microphone"
+              className={`ml-auto px-2.5 py-1 rounded-md disabled:opacity-40 ${listeningSpeaker ? 'bg-red-500/15 text-red-300' : 'bg-neutral-800 text-neutral-200'}`}
+            >
+              <Speaker className="inline w-3.5 h-3.5 mr-1" />
+              {listeningSpeaker ? 'Stop speaker' : 'Listen to speaker'}
+            </button>
+            <button onClick={toggleListening} disabled={listeningSpeaker} className={`px-2.5 py-1 rounded-md disabled:opacity-40 ${listening ? 'bg-red-500/15 text-red-300' : 'bg-neutral-800 text-neutral-200'}`}>
               {listening ? <MicOff className="inline w-3.5 h-3.5 mr-1" /> : <Mic className="inline w-3.5 h-3.5 mr-1" />}
-              {listening ? 'Stop' : 'Listen'}
+              {listening ? 'Stop' : 'Listen (mic)'}
             </button>
           </div>
 

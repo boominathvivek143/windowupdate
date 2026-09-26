@@ -72,6 +72,8 @@ export interface CompanionIPCBridge {
   // Window stays next to the mouse pointer (also Ctrl+Alt+F)
   setFollowCursor: (enabled: boolean) => Promise<boolean>;
   onFollowCursorChange: (callback: (enabled: boolean) => void) => () => void;
+  // Ctrl+Alt+L: relays the keypress here since audio capture only exists in the renderer
+  onToggleSpeakerListening: (callback: () => void) => () => void;
   // Ctrl+Alt+Up/Down while following: scroll the tooltip by this many pixels
   onTooltipScroll: (callback: (delta: number) => void) => () => void;
   // Tooltip paused (Ctrl+Space then P): it stays put and can be moved, resized, scrolled and typed in

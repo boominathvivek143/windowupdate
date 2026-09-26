@@ -3,7 +3,23 @@ import { ConnectionState, AppPreferences } from '../types/companion';
 import { ConnectionStatus } from '../components/ConnectionStatus';
 import { TextViewer } from '../components/TextViewer';
 import { SecurityModal } from '../components/SecurityModal';
-import { Pin, PinOff, Clipboard, ShieldCheck, Send, Camera, MousePointer2, Maximize2, Trash2, Sun, Moon } from 'lucide-react';
+import {
+  Pin,
+  PinOff,
+  Clipboard,
+  ClipboardX,
+  ShieldCheck,
+  Send,
+  Camera,
+  MousePointer2,
+  Maximize2,
+  Trash2,
+  Sun,
+  Moon,
+  Copy,
+  Check,
+  Speaker,
+} from 'lucide-react';
 import { VoiceInputButton, SpeakButton } from '../components/VoiceControls';
 
 // Companion window UI, rendered inside Electron (receives text and images over IPC)
@@ -17,27 +33,30 @@ export const CompanionApp: React.FC = () => {
   const [addresses, setAddresses] = useState<string[]>([]);
   const [clipboardWatch, setClipboardWatch] = useState<boolean>(false);
   const [clipboardNotice, setClipboardNotice] = useState<boolean>(false);
-  // Last thing shared with the web page: yellow block for copied text, green for a screenshot
-  const [activity, setActivity] = useState<{ kind: 'copy' | 'screenshot'; text: string; ok: boolean; note?: string } | null>(
-    null
-  );
+  // Everything shared with the web page (copies and screenshots), retained rather than
+  // overwritten by the next one — cleared only by the Clear button above the list.
+  type ActivityEntry = { id: number; kind: 'copy' | 'screenshot'; text: string; ok: boolean; note?: string };
+  const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
+  const activityIdRef = useRef(0);
+  const pushActivity = (entry: Omit<ActivityEntry, 'id'>) => {
+    activityIdRef.current += 1;
+    setActivityLog((prev) => [...prev, { ...entry, id: activityIdRef.current }].slice(-50));
+  };
   const [followCursor, setFollowCursor] = useState<boolean>(false);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const [followPaused, setFollowPaused] = useState<boolean>(false);
-  // Brief icon on the drag bar itself when something is shared while following (yellow=copy, green=screenshot)
+  // Icon on the drag bar itself when something is shared while following (copy=check, screenshot=camera).
+  // Stays until the user types or interacts with the bar, not on a timer.
   const [barIconState, setBarIconState] = useState<'copy' | 'screenshot' | null>(null);
-  const barIconTimerRef = useRef<any>(null);
-  const setBarIcon = (kind: 'copy' | 'screenshot') => {
-    setBarIconState(kind);
-    if (barIconTimerRef.current) clearTimeout(barIconTimerRef.current);
-    barIconTimerRef.current = setTimeout(() => setBarIconState(null), 2000);
-  };
+  const setBarIcon = (kind: 'copy' | 'screenshot') => setBarIconState(kind);
+  const clearBarIcon = () => setBarIconState(null);
   const [screenshotNotice, setScreenshotNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const screenshotNoticeTimerRef = useRef<any>(null);
   const replyInputRef = useRef<HTMLTextAreaElement>(null);
   const [images, setImages] = useState<string[]>([]);
   // Reply box: text shown on the connected web sender page
   const [reply, setReply] = useState<string>('');
+  const replyRef = useRef('');
   const replyTimerRef = useRef<any>(null);
 
   // Persistent preferences (theme, fontSize, autoScroll) - NEVER persists text per spec #13 & #15
@@ -106,7 +125,7 @@ export const CompanionApp: React.FC = () => {
       const unsubscribeClipboard = window.companion.onClipboardText((data) => {
         if (!data.text.trim()) return;
         // The main process already sent it to the web page; the reply box is left for typing
-        setActivity({
+        pushActivity({
           kind: 'copy',
           text: data.text,
           ok: !!data.delivered,
@@ -130,7 +149,7 @@ export const CompanionApp: React.FC = () => {
           ok: result.ok,
           text: result.error ? result.error : 'Screenshot sent',
         });
-        setActivity({ kind: 'screenshot', text: 'Screenshot shared', ok: result.ok && !result.error, note: result.error });
+        pushActivity({ kind: 'screenshot', text: 'Screenshot shared', ok: result.ok && !result.error, note: result.error });
         setBarIcon('screenshot');
         if (screenshotNoticeTimerRef.current) clearTimeout(screenshotNoticeTimerRef.current);
         screenshotNoticeTimerRef.current = setTimeout(() => setScreenshotNotice(null), 2500);
@@ -138,6 +157,11 @@ export const CompanionApp: React.FC = () => {
 
       const unsubscribeImages = window.companion.onImagesUpdate((data) => {
         setImages(data.images || []);
+      });
+
+      // Ctrl+Alt+L: audio capture only exists here in the renderer, so main just relays the key
+      const unsubscribeSpeakerShortcut = window.companion.onToggleSpeakerListening(() => {
+        toggleSpeakerListening();
       });
 
       // Subscribe to connection status
@@ -163,12 +187,18 @@ export const CompanionApp: React.FC = () => {
         unsubscribeFollow();
         unsubscribeScroll();
         unsubscribePause();
+        unsubscribeSpeakerShortcut();
         unsubscribeScreenshot();
         unsubscribeImages();
         unsubscribeConn();
       };
     }
   }, [updatePreferences]);
+
+  // New content replaces the transient copy/screenshot indicator on the follow-cursor bar
+  useEffect(() => {
+    clearBarIcon();
+  }, [text, reply]);
 
   // Action: Copy text
   const handleCopy = async () => {
@@ -221,12 +251,153 @@ export const CompanionApp: React.FC = () => {
   };
 
   const updateReply = (value: string, immediate = false) => {
+    replyRef.current = value;
     setReply(value);
     if (replyTimerRef.current) clearTimeout(replyTimerRef.current);
     const send = () => window.companion?.sendReply(value);
     if (immediate) send();
     else replyTimerRef.current = setTimeout(send, 150);
   };
+
+  // Speaker-only audio: Electron's documented way to capture system loopback audio, isolated
+  // from the microphone. A screen source id is required by the constraint but which one is
+  // picked doesn't matter — desktop audio capture is system-wide, not tied to a specific window.
+  // Recorded in rolling chunks and transcribed via Gemini (native SpeechRecognition can't take
+  // an arbitrary stream as input). The transcript and its AI answer stay local to this window —
+  // never sent to the sender — and the answer is shown only in the floating follow-cursor view.
+  const [listeningSpeaker, setListeningSpeaker] = useState(false);
+  const listeningSpeakerRef = useRef(false);
+  const speakerStreamRef = useRef<MediaStream | null>(null);
+  const speakerRecorderRef = useRef<MediaRecorder | null>(null);
+  const [speakerError, setSpeakerError] = useState<string | null>(null);
+  const speakerTranscriptRef = useRef('');
+  type SpeakerEntry = { id: number; question: string; answer: string };
+  const [speakerHistory, setSpeakerHistory] = useState<SpeakerEntry[]>([]);
+  const speakerHistoryIdRef = useRef(0);
+  const speakerAnalyzeTimerRef = useRef<any>(null);
+  // Scrolled to so the new entry's top is visible, rather than jumping to the container's bottom
+  const latestSpeakerEntryRef = useRef<HTMLDivElement>(null);
+
+  const analyzeSpeakerTranscript = async () => {
+    const transcript = speakerTranscriptRef.current.trim();
+    if (!transcript) return;
+    // Each analyzed batch becomes its own history entry; the next one starts fresh
+    speakerTranscriptRef.current = '';
+    try {
+      const res = await fetch('/api/practice/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transcript, speakerRole: 'interviewer' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.answer) {
+        speakerHistoryIdRef.current += 1;
+        setSpeakerHistory((prev) =>
+          [...prev, { id: speakerHistoryIdRef.current, question: transcript, answer: data.answer }].slice(-50)
+        );
+      }
+    } catch {}
+  };
+
+  const stopSpeakerCapture = () => {
+    listeningSpeakerRef.current = false;
+    try {
+      speakerRecorderRef.current?.stop();
+    } catch {}
+    speakerStreamRef.current?.getTracks().forEach((t) => t.stop());
+    speakerStreamRef.current = null;
+    setListeningSpeaker(false);
+    if (speakerAnalyzeTimerRef.current) clearTimeout(speakerAnalyzeTimerRef.current);
+  };
+
+  const startSpeakerCapture = async () => {
+    setSpeakerError(null);
+    try {
+      // The main process's setDisplayMediaRequestHandler supplies a screen + loopback audio
+      // directly, so this resolves without showing a share-picker dialog.
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+
+      const audioTracks = stream.getAudioTracks();
+      stream.getVideoTracks().forEach((t) => t.stop());
+      if (audioTracks.length === 0) {
+        stream.getTracks().forEach((t) => t.stop());
+        setSpeakerError('No system audio track available to capture.');
+        return;
+      }
+
+      speakerStreamRef.current = stream;
+      listeningSpeakerRef.current = true;
+      setListeningSpeaker(true);
+      const audioOnlyStream = new MediaStream(audioTracks);
+
+      const recordChunk = () => {
+        if (!listeningSpeakerRef.current) return;
+        const recorder = new MediaRecorder(audioOnlyStream);
+        const chunks: Blob[] = [];
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0) chunks.push(e.data);
+        };
+        recorder.onstop = async () => {
+          const blob = new Blob(chunks, { type: 'audio/webm' });
+          console.log(`[SpeakerAudio] chunk recorded: ${blob.size} bytes, track settings:`, audioTracks[0]?.getSettings());
+          if (blob.size > 0) {
+            try {
+              const reader = new FileReader();
+              const audio: string = await new Promise((resolve, reject) => {
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.onerror = () => reject(reader.error);
+                reader.readAsDataURL(blob);
+              });
+              const res = await fetch('/api/transcribe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ audio }),
+              });
+              const data = await res.json().catch(() => ({}));
+              if (res.ok && data.text) {
+                const next = `${speakerTranscriptRef.current} ${data.text}`.trim().slice(-12000);
+                speakerTranscriptRef.current = next;
+                if (speakerAnalyzeTimerRef.current) clearTimeout(speakerAnalyzeTimerRef.current);
+                speakerAnalyzeTimerRef.current = setTimeout(analyzeSpeakerTranscript, 1200);
+              }
+            } catch {}
+          }
+          if (listeningSpeakerRef.current) recordChunk();
+        };
+        speakerRecorderRef.current = recorder;
+        recorder.start();
+        setTimeout(() => {
+          if (recorder.state !== 'inactive') recorder.stop();
+        }, 6000);
+      };
+      recordChunk();
+    } catch (err: any) {
+      setSpeakerError(err?.message || 'Speaker audio capture failed.');
+    }
+  };
+
+  const toggleSpeakerListening = () => {
+    if (listeningSpeakerRef.current) stopSpeakerCapture();
+    else startSpeakerCapture();
+  };
+
+  useEffect(() => stopSpeakerCapture, []);
+
+  // Follow-window tooltip: never clear on new content (clipboard, screenshot) — just scroll
+  // down to reveal it, so earlier conversation stays visible by scrolling back up
+  useEffect(() => {
+    if (followCursor) {
+      tooltipRef.current?.scrollTo({ top: tooltipRef.current.scrollHeight, behavior: 'smooth' });
+    }
+  }, [text, reply, images, followCursor]);
+
+  // Each new speaker Q&A entry scrolls to its own top, not the container's bottom — so a long
+  // answer doesn't hide where the new entry actually starts
+  useEffect(() => {
+    if (followCursor) {
+      latestSpeakerEntryRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
+  }, [speakerHistory, followCursor]);
 
   // Drag handles: hold the left button to move the window (buttons inside still click normally)
   const dragHandlers = {
@@ -259,20 +430,70 @@ export const CompanionApp: React.FC = () => {
           aria-label="Drag to move"
         >
           <span className="flex items-center" title={barIconState === 'copy' ? 'Copied text shared' : barIconState === 'screenshot' ? 'Screenshot shared' : undefined}>
-            {barIconState === 'copy' && <Clipboard className="w-3 h-3 text-amber-400" />}
+            {barIconState === 'copy' && <Check className="w-3 h-3 text-emerald-400" />}
             {barIconState === 'screenshot' && <Camera className="w-3 h-3 text-emerald-400" />}
           </span>
-          <button
-            onClick={() => window.companion?.setFollowCursor(false)}
-            className="p-0.5 rounded text-indigo-200 hover:text-white hover:bg-indigo-500/40 cursor-pointer"
-            title="Back to full window"
-            aria-label="Back to full window"
-          >
-            <Maximize2 className="w-3 h-3" />
-          </button>
+          <div className="flex items-center gap-0.5">
+            <button
+              onClick={() => {
+                clearBarIcon();
+                toggleClipboardWatch();
+              }}
+              className="p-0.5 rounded text-indigo-200 hover:text-white hover:bg-indigo-500/40 cursor-default"
+              title={`Auto-send copied text is ${clipboardWatch ? 'ON' : 'OFF'} — click to toggle`}
+              aria-pressed={clipboardWatch}
+            >
+              {clipboardWatch ? <Clipboard className="w-3 h-3" /> : <ClipboardX className="w-3 h-3" />}
+            </button>
+            <button
+              onClick={() => {
+                clearBarIcon();
+                handleCopy();
+              }}
+              className="p-0.5 rounded text-indigo-200 hover:text-white hover:bg-indigo-500/40 cursor-default"
+              title="Copy visible text"
+            >
+              <Copy className="w-3 h-3" />
+            </button>
+            <button
+              onClick={() => {
+                clearBarIcon();
+                toggleSpeakerListening();
+              }}
+              className={`p-0.5 rounded hover:bg-indigo-500/40 cursor-default ${
+                listeningSpeaker ? 'text-red-300' : 'text-indigo-200 hover:text-white'
+              }`}
+              title={listeningSpeaker ? 'Stop listening to speaker audio (Ctrl+Alt+L)' : "Listen to speaker audio and show an AI answer here (Ctrl+Alt+L)"}
+              aria-pressed={listeningSpeaker}
+            >
+              <Speaker className="w-3 h-3" />
+            </button>
+            <button
+              onClick={() => {
+                clearBarIcon();
+                window.companion?.setFollowCursor(false);
+              }}
+              className="p-0.5 rounded text-indigo-200 hover:text-white hover:bg-indigo-500/40 cursor-default"
+              title="Back to full window"
+              aria-label="Back to full window"
+            >
+              <Maximize2 className="w-3 h-3" />
+            </button>
+          </div>
         </div>
-        <div ref={tooltipRef} className="flex-1 min-h-0 overflow-y-auto px-2 py-1 select-text whitespace-pre-wrap break-words leading-tight">
-          {text || reply}
+        <div ref={tooltipRef} className="flex-1 min-h-0 overflow-y-auto px-2 py-1 select-text cursor-default">
+          {speakerError && <div className="text-amber-400 leading-tight">{speakerError}</div>}
+          {text && <div className="whitespace-pre-wrap break-words leading-tight">{text}</div>}
+          {text && reply && <div className="my-1 border-t border-current opacity-20" />}
+          {reply && <div className="whitespace-pre-wrap break-words leading-tight text-indigo-300">{reply}</div>}
+          {(text || reply) && speakerHistory.length > 0 && <div className="my-1 border-t border-current opacity-20" />}
+          {speakerHistory.map((entry, i) => (
+            <div key={entry.id} ref={i === speakerHistory.length - 1 ? latestSpeakerEntryRef : undefined}>
+              {i > 0 && <div className="my-1 border-t border-current opacity-20" />}
+              <div className="whitespace-pre-wrap break-words leading-tight text-neutral-400 italic">{entry.question}</div>
+              <div className="whitespace-pre-wrap break-words leading-tight text-emerald-300">{entry.answer}</div>
+            </div>
+          ))}
         </div>
       </div>
     );
@@ -290,15 +511,25 @@ export const CompanionApp: React.FC = () => {
           className="shrink-0 h-3 flex items-center justify-center bg-indigo-500/25"
           title={barIconState === 'copy' ? 'Copied text shared' : barIconState === 'screenshot' ? 'Screenshot shared' : undefined}
         >
-          {barIconState === 'copy' && <Clipboard className="w-2.5 h-2.5 text-amber-400" />}
+          {barIconState === 'copy' && <Check className="w-2.5 h-2.5 text-emerald-400" />}
           {barIconState === 'screenshot' && <Camera className="w-2.5 h-2.5 text-emerald-400" />}
         </div>
         <div ref={tooltipRef} className="flex-1 min-h-0 overflow-y-auto px-2 py-1">
-          {text || reply ? (
-            <div className="whitespace-pre-wrap break-words leading-tight">{text || reply}</div>
-          ) : images.length > 0 ? (
+          {speakerError && <div className="text-amber-400 leading-tight">{speakerError}</div>}
+          {text && <div className="whitespace-pre-wrap break-words leading-tight">{text}</div>}
+          {text && reply && <div className="my-1 border-t border-current opacity-20" />}
+          {reply && <div className="whitespace-pre-wrap break-words leading-tight text-indigo-300">{reply}</div>}
+          {(text || reply) && speakerHistory.length > 0 && <div className="my-1 border-t border-current opacity-20" />}
+          {speakerHistory.map((entry, i) => (
+            <div key={entry.id} ref={i === speakerHistory.length - 1 ? latestSpeakerEntryRef : undefined}>
+              {i > 0 && <div className="my-1 border-t border-current opacity-20" />}
+              <div className="whitespace-pre-wrap break-words leading-tight text-neutral-400 italic">{entry.question}</div>
+              <div className="whitespace-pre-wrap break-words leading-tight text-emerald-300">{entry.answer}</div>
+            </div>
+          ))}
+          {!text && !reply && speakerHistory.length === 0 && images.length > 0 && (
             <img src={images[0]} alt="Latest image" className="max-h-full max-w-full rounded" draggable={false} />
-          ) : null}
+          )}
         </div>
       </div>
     );
@@ -453,24 +684,43 @@ export const CompanionApp: React.FC = () => {
       />
       )}
 
-      {/* Last shared item: yellow = copied text, green = screenshot; red note when not delivered */}
-      {activity && (
-        <div
-          className={`shrink-0 mx-2 mt-2 flex items-start gap-2 rounded-md border px-2 py-1.5 text-xs ${
-            activity.kind === 'copy' ? 'border-amber-400/40 bg-amber-400/10' : 'border-emerald-400/40 bg-emerald-400/10'
-          }`}
-        >
-          {activity.kind === 'copy' ? (
-            <Clipboard className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-400" />
-          ) : (
-            <Camera className="w-3.5 h-3.5 mt-0.5 shrink-0 text-emerald-400" />
-          )}
-          <div className="min-w-0 flex-1">
-            <div className={activity.kind === 'copy' ? 'text-amber-300' : 'text-emerald-300'}>
-              {activity.kind === 'copy' ? 'Copied text shared' : 'Screenshot shared'}
-            </div>
-            {activity.kind === 'copy' && <div className="truncate text-neutral-400">{activity.text}</div>}
-            {activity.note && <div className="text-red-400">{activity.note}</div>}
+      {/* Shared history: yellow = copied text, green = screenshot; retained until Clear is pressed */}
+      {activityLog.length > 0 && (
+        <div className="shrink-0 mx-2 mt-2 rounded-md border border-neutral-800 overflow-hidden">
+          <div className="flex items-center justify-between px-2 py-1 bg-neutral-900/80 border-b border-neutral-800">
+            <span className="text-[10px] uppercase tracking-wide text-neutral-500">Shared history</span>
+            <button
+              onClick={() => setActivityLog([])}
+              className="p-0.5 rounded text-neutral-400 hover:text-rose-400 transition-colors"
+              title="Clear shared history"
+            >
+              <Trash2 className="w-3 h-3" />
+            </button>
+          </div>
+          <div className="max-h-32 overflow-y-auto">
+            {activityLog.map((item) => (
+              <div
+                key={item.id}
+                className={`flex items-start gap-2 px-2 py-1.5 text-xs border-b last:border-b-0 ${
+                  item.kind === 'copy'
+                    ? 'border-amber-400/10 bg-amber-400/5'
+                    : 'border-emerald-400/10 bg-emerald-400/5'
+                }`}
+              >
+                {item.kind === 'copy' ? (
+                  <Clipboard className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-400" />
+                ) : (
+                  <Camera className="w-3.5 h-3.5 mt-0.5 shrink-0 text-emerald-400" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className={item.kind === 'copy' ? 'text-amber-300' : 'text-emerald-300'}>
+                    {item.kind === 'copy' ? 'Copied text shared' : 'Screenshot shared'}
+                  </div>
+                  {item.kind === 'copy' && <div className="truncate text-neutral-400">{item.text}</div>}
+                  {item.note && <div className="text-red-400">{item.note}</div>}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -490,6 +740,20 @@ export const CompanionApp: React.FC = () => {
             )}
           </span>
           <div className="flex items-center gap-1">
+            <button
+              onClick={toggleSpeakerListening}
+              className={`p-1 rounded transition-colors ${
+                listeningSpeaker ? 'text-red-400' : 'text-neutral-400 hover:text-white'
+              }`}
+              title={
+                listeningSpeaker
+                  ? 'Stop transcribing speaker audio (Ctrl+Alt+L)'
+                  : "Transcribe speaker/system audio only (e.g. the other person's voice), not the microphone (Ctrl+Alt+L)"
+              }
+              aria-pressed={listeningSpeaker}
+            >
+              <Speaker className="w-4 h-4" />
+            </button>
             <VoiceInputButton
               onTranscript={(spoken) => updateReply(reply ? `${reply} ${spoken}` : spoken, true)}
               title="Dictate reply"
@@ -502,6 +766,7 @@ export const CompanionApp: React.FC = () => {
             )}
           </div>
         </div>
+        {speakerError && <p className="text-[11px] text-amber-400 px-0.5">{speakerError}</p>}
         <div className="relative">
           <textarea
             ref={replyInputRef}

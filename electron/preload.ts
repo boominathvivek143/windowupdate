@@ -58,6 +58,14 @@ const companionAPI: CompanionIPCBridge = {
     };
   },
 
+  onToggleSpeakerListening: (callback) => {
+    const subscription = () => callback();
+    ipcRenderer.on(IPC_CHANNELS.ON_TOGGLE_SPEAKER_LISTENING, subscription);
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.ON_TOGGLE_SPEAKER_LISTENING, subscription);
+    };
+  },
+
   onScreenshotSent: (callback) => {
     const subscription = (_event: IpcRendererEvent, result: { ok: boolean; error?: string }) => callback(result);
     ipcRenderer.on(IPC_CHANNELS.ON_SCREENSHOT_SENT, subscription);
