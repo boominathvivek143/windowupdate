@@ -65,7 +65,10 @@ export const SecurityModal: React.FC<SecurityModalProps> = ({
     }
   };
 
-  const pairingUrl = `${window.location.origin}/?token=${sessionToken}&mode=sender`;
+  // Pre-fills both the address and token on whatever device opens this link (scanned or clicked),
+  // so nobody has to notice or retype the LAN IP, which is different on every machine/network.
+  const primaryAddress = addresses[0] || '';
+  const pairingUrl = `${window.location.origin}/?desktop=${encodeURIComponent(primaryAddress)}&desktopToken=${encodeURIComponent(sessionToken)}`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
@@ -218,23 +221,48 @@ export const SecurityModal: React.FC<SecurityModalProps> = ({
             </button>
 
             {showQR && (
-              <div className="mt-3 p-3 rounded-lg border border-neutral-800 bg-neutral-950 text-center">
-                {/* SVG QR Code Simulation */}
-                <div className="mx-auto w-32 h-32 bg-white p-2 rounded-md shadow-sm mb-2 flex items-center justify-center">
-                  <div className="grid grid-cols-6 gap-1 w-full h-full p-1 bg-neutral-900 rounded">
-                    {Array.from({ length: 36 }).map((_, i) => (
-                      <div
-                        key={i}
-                        className={`rounded-xs ${
-                          (i % 2 === 0 && i % 3 !== 0) || i === 0 || i === 5 || i === 30 || i === 35
-                            ? 'bg-white'
-                            : 'bg-neutral-800'
-                        }`}
-                      />
-                    ))}
+              <div className="mt-3 p-3 rounded-lg border border-neutral-800 bg-neutral-950 space-y-2.5">
+                {primaryAddress && (
+                  <div className="flex items-start gap-2">
+                    <span className="shrink-0 w-4 h-4 rounded-full bg-indigo-500/20 text-indigo-400 text-[10px] font-bold flex items-center justify-center mt-0.5">
+                      1
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <a
+                        href={`https://${primaryAddress}/health`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-indigo-300 hover:text-indigo-200 underline"
+                      >
+                        Trust this connection (one-time)
+                      </a>
+                      <p className="text-[11px] text-neutral-500 mt-0.5">
+                        Only needed once per browser: click through the "not secure" warning (the certificate is
+                        self-signed — there is no public one for a LAN address).
+                      </p>
+                    </div>
+                  </div>
+                )}
+                <div className="flex items-start gap-2">
+                  <span className="shrink-0 w-4 h-4 rounded-full bg-indigo-500/20 text-indigo-400 text-[10px] font-bold flex items-center justify-center mt-0.5">
+                    {primaryAddress ? 2 : 1}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <a
+                      href={pairingUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-indigo-300 hover:text-indigo-200 underline break-all"
+                    >
+                      Open sender page (address &amp; token pre-filled)
+                    </a>
                   </div>
                 </div>
-                <div className="text-[11px] text-neutral-400 break-all select-all font-mono">
+                <div
+                  className={`text-[11px] break-all select-all font-mono pt-2 border-t ${
+                    isDark ? 'border-neutral-800 text-neutral-500' : 'border-neutral-200 text-neutral-500'
+                  }`}
+                >
                   {pairingUrl}
                 </div>
               </div>
