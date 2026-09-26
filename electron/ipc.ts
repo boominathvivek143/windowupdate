@@ -45,6 +45,7 @@ export interface AppPreferences {
   clipboardWatch?: boolean;
   followCursor?: boolean;
   tooltipSize?: { width: number; height: number };
+  webAppUrl?: string;
 }
 
 export interface ConnectionStatusPayload {

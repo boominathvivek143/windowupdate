@@ -3,25 +3,7 @@ import { ConnectionState, AppPreferences } from '../types/companion';
 import { ConnectionStatus } from '../components/ConnectionStatus';
 import { TextViewer } from '../components/TextViewer';
 import { SecurityModal } from '../components/SecurityModal';
-import {
-  Pin,
-  PinOff,
-  Clipboard,
-  ShieldCheck,
-  Send,
-  Camera,
-  MousePointer2,
-  Maximize2,
-  ZoomIn,
-  ZoomOut,
-  RotateCcw,
-  ArrowDown,
-  Copy,
-  Check,
-  Trash2,
-  Sun,
-  Moon,
-} from 'lucide-react';
+import { Pin, PinOff, Clipboard, ShieldCheck, Send, Camera, MousePointer2, Maximize2, Trash2, Sun, Moon } from 'lucide-react';
 import { VoiceInputButton, SpeakButton } from '../components/VoiceControls';
 
 // Companion window UI, rendered inside Electron (receives text and images over IPC)
@@ -30,7 +12,6 @@ export const CompanionApp: React.FC = () => {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionState>('Connecting...');
   const [senderActive, setSenderActive] = useState<boolean>(false);
   const [sessionToken, setSessionToken] = useState<string>('');
-  const [copied, setCopied] = useState<boolean>(false);
   const [isSecurityModalOpen, setIsSecurityModalOpen] = useState<boolean>(false);
   const [port, setPort] = useState<number>(8765);
   const [addresses, setAddresses] = useState<string[]>([]);
@@ -204,10 +185,6 @@ export const CompanionApp: React.FC = () => {
       }
     }
 
-    if (success) {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    }
   };
 
   // Action: Clear text
@@ -380,49 +357,6 @@ export const CompanionApp: React.FC = () => {
         {/* Right: every action, icon-only */}
         <div className="flex items-center gap-0.5 shrink-0">
           <button
-            onClick={() => updatePreferences({ fontSize: Math.max(12, preferences.fontSize - 2) })}
-            disabled={preferences.fontSize <= 12}
-            className={`p-1 rounded text-neutral-400 hover:text-white disabled:opacity-40 transition-colors ${isDark ? 'hover:bg-neutral-800' : 'hover:bg-neutral-200'}`}
-            title="Decrease font size"
-          >
-            <ZoomOut className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => updatePreferences({ fontSize: Math.min(32, preferences.fontSize + 2) })}
-            disabled={preferences.fontSize >= 32}
-            className={`p-1 rounded text-neutral-400 hover:text-white disabled:opacity-40 transition-colors ${isDark ? 'hover:bg-neutral-800' : 'hover:bg-neutral-200'}`}
-            title="Increase font size"
-          >
-            <ZoomIn className="w-3.5 h-3.5" />
-          </button>
-          {preferences.fontSize !== 16 && (
-            <button
-              onClick={() => updatePreferences({ fontSize: 16 })}
-              className={`p-1 rounded text-neutral-400 hover:text-white transition-colors ${isDark ? 'hover:bg-neutral-800' : 'hover:bg-neutral-200'}`}
-              title="Reset font size"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
-          )}
-          <button
-            onClick={() => updatePreferences({ autoScroll: !preferences.autoScroll })}
-            className={`p-1 rounded transition-colors ${
-              preferences.autoScroll ? 'text-indigo-400' : 'text-neutral-400 hover:text-white'
-            } ${isDark ? 'hover:bg-neutral-800' : 'hover:bg-neutral-200'}`}
-            title={preferences.autoScroll ? 'Auto-scroll on update enabled' : 'Auto-scroll disabled'}
-            aria-pressed={preferences.autoScroll}
-          >
-            <ArrowDown className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={handleCopy}
-            disabled={charCount === 0}
-            className={`p-1 rounded text-neutral-400 hover:text-white disabled:opacity-40 transition-colors ${isDark ? 'hover:bg-neutral-800' : 'hover:bg-neutral-200'}`}
-            title="Copy content to system clipboard (Ctrl+C)"
-          >
-            {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-          </button>
-          <button
             onClick={handleClear}
             disabled={charCount === 0}
             className={`p-1 rounded text-neutral-400 hover:text-rose-400 disabled:opacity-40 transition-colors ${isDark ? 'hover:bg-neutral-800' : 'hover:bg-neutral-200'}`}
@@ -566,26 +500,28 @@ export const CompanionApp: React.FC = () => {
                 Clear reply
               </button>
             )}
-            <button
-              onClick={sendReplyNow}
-              disabled={!reply}
-              className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] bg-indigo-600 text-white disabled:opacity-40"
-              title={senderActive ? 'Send reply now' : 'No web page connected — the reply is delivered when it connects'}
-            >
-              <Send className="w-3 h-3" /> Send
-            </button>
           </div>
         </div>
-        <textarea
-          ref={replyInputRef}
-          value={reply}
-          onChange={(e) => updateReply(e.target.value)}
-          placeholder="Type or paste a reply…"
-          rows={3}
-          className={`w-full resize-none rounded-md border px-2 py-1.5 text-sm select-text focus:outline-none focus:border-indigo-500 ${
-            isDark ? 'bg-neutral-950 border-neutral-800 text-neutral-100' : 'bg-white border-neutral-300 text-neutral-900'
-          }`}
-        />
+        <div className="relative">
+          <textarea
+            ref={replyInputRef}
+            value={reply}
+            onChange={(e) => updateReply(e.target.value)}
+            placeholder="Type or paste a reply…"
+            rows={3}
+            className={`w-full resize-none rounded-md border px-2 py-1.5 pr-8 text-sm select-text focus:outline-none focus:border-indigo-500 ${
+              isDark ? 'bg-neutral-950 border-neutral-800 text-neutral-100' : 'bg-white border-neutral-300 text-neutral-900'
+            }`}
+          />
+          <button
+            onClick={sendReplyNow}
+            disabled={!reply}
+            className="absolute bottom-1.5 right-1.5 p-1 rounded text-indigo-400 hover:text-indigo-300 disabled:opacity-30 transition-colors"
+            title={senderActive ? 'Send reply now' : 'No web page connected — the reply is delivered when it connects'}
+          >
+            <Send className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Security & Token Settings Modal */}
@@ -598,6 +534,8 @@ export const CompanionApp: React.FC = () => {
         theme={preferences.theme}
         port={port}
         addresses={addresses}
+        webAppUrl={preferences.webAppUrl || ''}
+        onUpdateWebAppUrl={(url) => updatePreferences({ webAppUrl: url })}
       />
     </div>
   );

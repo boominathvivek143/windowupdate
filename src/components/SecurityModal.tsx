@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Shield, Key, Copy, Check, RefreshCw, X, QrCode, Pencil } from 'lucide-react';
+import { Shield, Key, Copy, Check, RefreshCw, X, Pencil, Link2 } from 'lucide-react';
 
 interface SecurityModalProps {
   isOpen: boolean;
@@ -12,6 +12,11 @@ interface SecurityModalProps {
   port: number;
   // Network addresses (host:port) a sender on another machine can use; only known inside Electron
   addresses?: string[];
+  // Where the web sender page is hosted (e.g. https://windowupdate.ai.studio). The companion
+  // window has no reachable origin of its own — a packaged app loads a local file — so this
+  // can't be inferred and has to be configured once.
+  webAppUrl: string;
+  onUpdateWebAppUrl: (url: string) => void;
 }
 
 export const SecurityModal: React.FC<SecurityModalProps> = ({
@@ -23,26 +28,30 @@ export const SecurityModal: React.FC<SecurityModalProps> = ({
   theme,
   port,
   addresses = [],
+  webAppUrl,
+  onUpdateWebAppUrl,
 }) => {
-  const [copied, setCopied] = useState(false);
-  const [showQR, setShowQR] = useState(false);
+  const [copied, setCopied] = useState<'token' | 'pairing' | 'webAppUrl' | null>(null);
   const [isEditingToken, setIsEditingToken] = useState(false);
   const [customToken, setCustomToken] = useState('');
   const [tokenError, setTokenError] = useState<string | null>(null);
+  const [isEditingWebAppUrl, setIsEditingWebAppUrl] = useState(false);
+  const [customWebAppUrl, setCustomWebAppUrl] = useState(webAppUrl);
   const isDark = theme === 'dark';
 
   if (!isOpen) return null;
 
-  const handleCopy = async () => {
-    // Electron's sandboxed renderer blocks navigator.clipboard; go through the main process instead
+  // Electron's sandboxed renderer blocks navigator.clipboard; go through the main process instead
+  const copyText = async (text: string, which: 'token' | 'pairing' | 'webAppUrl') => {
     const success = window.companion?.copyText
-      ? await window.companion.copyText(sessionToken)
-      : await navigator.clipboard.writeText(sessionToken).then(() => true).catch(() => false);
+      ? await window.companion.copyText(text)
+      : await navigator.clipboard.writeText(text).then(() => true).catch(() => false);
     if (success) {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setCopied(which);
+      setTimeout(() => setCopied(null), 2000);
     }
   };
+  const handleCopy = () => copyText(sessionToken, 'token');
 
   const startEditingToken = () => {
     setCustomToken(sessionToken);
@@ -68,7 +77,17 @@ export const SecurityModal: React.FC<SecurityModalProps> = ({
   // Pre-fills both the address and token on whatever device opens this link (scanned or clicked),
   // so nobody has to notice or retype the LAN IP, which is different on every machine/network.
   const primaryAddress = addresses[0] || '';
-  const pairingUrl = `${window.location.origin}/?desktop=${encodeURIComponent(primaryAddress)}&desktopToken=${encodeURIComponent(sessionToken)}`;
+  const pairingBase = webAppUrl.trim().replace(/\/+$/, '');
+  const pairingUrl = pairingBase
+    ? `${pairingBase}/?desktop=${encodeURIComponent(primaryAddress)}&desktopToken=${encodeURIComponent(sessionToken)}`
+    : '';
+
+  const submitWebAppUrl = () => {
+    const trimmed = customWebAppUrl.trim();
+    if (!trimmed) return;
+    onUpdateWebAppUrl(trimmed);
+    setIsEditingWebAppUrl(false);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
@@ -179,7 +198,7 @@ export const SecurityModal: React.FC<SecurityModalProps> = ({
                     className="p-1 text-neutral-400 hover:text-indigo-400 transition-colors"
                     title="Copy token"
                   >
-                    {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copied === 'token' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                   </button>
                   <button
                     onClick={startEditingToken}
@@ -200,72 +219,120 @@ export const SecurityModal: React.FC<SecurityModalProps> = ({
             )}
           </div>
 
-          {/* Quick Pairing & QR Feature (Section 24) */}
-          <div className="pt-2">
-            <button
-              onClick={() => setShowQR(!showQR)}
-              className={`flex items-center justify-between w-full p-2.5 rounded-lg border text-left transition-colors ${
-                isDark
-                  ? 'border-neutral-800 hover:bg-neutral-800/40'
-                  : 'border-neutral-200 hover:bg-neutral-50'
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <QrCode className="w-4 h-4 text-indigo-400" />
-                <div>
-                  <div className="font-medium text-xs">Direct Web Sender Pairing URL</div>
-                  <div className="text-[11px] text-neutral-500">Includes authenticated session token</div>
-                </div>
-              </div>
-              <span className="text-[11px] text-indigo-400 font-semibold">{showQR ? 'Hide' : 'View'}</span>
-            </button>
-
-            {showQR && (
-              <div className="mt-3 p-3 rounded-lg border border-neutral-800 bg-neutral-950 space-y-2.5">
-                {primaryAddress && (
-                  <div className="flex items-start gap-2">
-                    <span className="shrink-0 w-4 h-4 rounded-full bg-indigo-500/20 text-indigo-400 text-[10px] font-bold flex items-center justify-center mt-0.5">
-                      1
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <a
-                        href={`https://${primaryAddress}/health`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs text-indigo-300 hover:text-indigo-200 underline"
-                      >
-                        Trust this connection (one-time)
-                      </a>
-                      <p className="text-[11px] text-neutral-500 mt-0.5">
-                        Only needed once per browser: click through the "not secure" warning (the certificate is
-                        self-signed — there is no public one for a LAN address).
-                      </p>
-                    </div>
-                  </div>
-                )}
-                <div className="flex items-start gap-2">
-                  <span className="shrink-0 w-4 h-4 rounded-full bg-indigo-500/20 text-indigo-400 text-[10px] font-bold flex items-center justify-center mt-0.5">
-                    {primaryAddress ? 2 : 1}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <a
-                      href={pairingUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs text-indigo-300 hover:text-indigo-200 underline break-all"
+          {/* Web sender pairing: the companion has no reachable origin of its own, so the web
+              app's URL is configured once here, then a ready-to-copy link (address + token
+              pre-filled) can be shared without opening anything else. */}
+          <div className="pt-1 space-y-2">
+            <div>
+              <label className="block text-[11px] font-medium text-neutral-400 mb-1">Web App URL</label>
+              {isEditingWebAppUrl ? (
+                <div className="space-y-1.5">
+                  <input
+                    autoFocus
+                    value={customWebAppUrl}
+                    onChange={(e) => setCustomWebAppUrl(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') submitWebAppUrl();
+                      if (e.key === 'Escape') setIsEditingWebAppUrl(false);
+                    }}
+                    placeholder="https://windowupdate.ai.studio"
+                    className={`w-full px-2.5 py-1.5 rounded-md border border-indigo-500/60 font-mono text-[11px] text-indigo-300 focus:outline-none ${
+                      isDark ? 'bg-neutral-950' : 'bg-neutral-50'
+                    }`}
+                  />
+                  <div className="flex items-center justify-end gap-1.5">
+                    <button
+                      onClick={() => setIsEditingWebAppUrl(false)}
+                      className="px-2.5 py-1 rounded text-[11px] font-medium text-neutral-400 hover:text-neutral-200"
                     >
-                      Open sender page (address &amp; token pre-filled)
-                    </a>
+                      Cancel
+                    </button>
+                    <button
+                      onClick={submitWebAppUrl}
+                      className="px-2.5 py-1 rounded text-[11px] font-medium bg-indigo-600 text-white hover:bg-indigo-500"
+                    >
+                      Save
+                    </button>
                   </div>
                 </div>
+              ) : (
                 <div
-                  className={`text-[11px] break-all select-all font-mono pt-2 border-t ${
-                    isDark ? 'border-neutral-800 text-neutral-500' : 'border-neutral-200 text-neutral-500'
+                  className={`flex items-center justify-between rounded-lg border px-3 py-2 ${
+                    isDark ? 'bg-neutral-950 border-neutral-800' : 'bg-neutral-50 border-neutral-200'
                   }`}
                 >
-                  {pairingUrl}
+                  <span className="font-mono text-xs text-indigo-400 truncate">
+                    {webAppUrl || 'Not set — click to configure'}
+                  </span>
+                  <div className="flex items-center gap-1 shrink-0 ml-2">
+                    <button
+                      onClick={() => copyText(webAppUrl, 'webAppUrl')}
+                      disabled={!webAppUrl}
+                      className="p-1 text-neutral-400 hover:text-indigo-400 disabled:opacity-40 transition-colors"
+                      title="Copy web app URL"
+                    >
+                      {copied === 'webAppUrl' ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setCustomWebAppUrl(webAppUrl);
+                        setIsEditingWebAppUrl(true);
+                      }}
+                      className="p-1 text-neutral-400 hover:text-indigo-400 transition-colors"
+                      title="Edit web app URL"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {pairingUrl ? (
+              <div>
+                <label className="block text-[11px] font-medium text-neutral-400 mb-1">
+                  Sender Pairing Link (address &amp; token pre-filled)
+                </label>
+                <div
+                  className={`flex items-center justify-between rounded-lg border px-3 py-2 ${
+                    isDark ? 'bg-neutral-950 border-neutral-800' : 'bg-neutral-50 border-neutral-200'
+                  }`}
+                >
+                  <span className="font-mono text-[11px] text-indigo-400 truncate">{pairingUrl}</span>
+                  <button
+                    onClick={() => copyText(pairingUrl, 'pairing')}
+                    className="p-1 text-neutral-400 hover:text-indigo-400 transition-colors shrink-0 ml-2"
+                    title="Copy pairing link"
+                  >
+                    {copied === 'pairing' ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : (
+                      <Link2 className="w-3.5 h-3.5" />
+                    )}
+                  </button>
                 </div>
               </div>
+            ) : (
+              <p className="text-[11px] text-amber-400/90">Set the Web App URL above to generate a pairing link.</p>
+            )}
+
+            {primaryAddress && (
+              <p className="text-[11px] text-neutral-500">
+                First time pairing from a given browser?{' '}
+                <a
+                  href={`https://${primaryAddress}/health`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-indigo-300 hover:text-indigo-200 underline"
+                >
+                  Trust this connection once
+                </a>{' '}
+                (self-signed certificate — there's no public one for a LAN address).
+              </p>
             )}
           </div>
 

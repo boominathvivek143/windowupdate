@@ -9,6 +9,10 @@ export interface AppPreferences {
   alwaysOnTop?: boolean;
   clipboardWatch?: boolean;
   followCursor?: boolean;
+  // Where the web sender page is actually hosted (e.g. https://windowupdate.ai.studio).
+  // The companion window itself has no reachable origin of its own (it loads a local file when
+  // packaged), so this can't be inferred — it has to be configured once.
+  webAppUrl?: string;
 }
 
 export interface WsMessagePayload {

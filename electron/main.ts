@@ -133,6 +133,13 @@ const DEFAULT_PREFERENCES: AppPreferences = {
   clipboardWatch: true,
   // Pinned by default: with no taskbar button, an unpinned window gets lost behind other apps
   alwaysOnTop: true,
+  // Where the web sender page is hosted, for the pairing link (Security modal). The companion
+  // window has no reachable origin of its own to infer this from (a packaged app loads a local
+  // file), so it defaults to .env's APP_URL if set, else the deployed site, and is user-editable.
+  webAppUrl:
+    process.env.APP_URL && process.env.APP_URL !== 'MY_APP_URL'
+      ? process.env.APP_URL
+      : 'https://windowupdate.ai.studio',
 };
 
 function loadStoredPreferences(): AppPreferences {

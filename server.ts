@@ -62,6 +62,9 @@ function setupApi() {
       res.status(404).send('No desktop installer has been built yet. Run `npm run package:win` on the server.');
       return;
     }
+    // The installer file is replaced in place under the same name after each rebuild; without
+    // this, browsers can silently serve a stale cached copy instead of re-fetching it.
+    res.set('Cache-Control', 'no-store');
     res.download(installer, path.basename(installer));
   });
 
